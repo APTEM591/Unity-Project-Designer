@@ -2,6 +2,8 @@
 
 A lightweight, zero-dependency Unity Editor extension that enhances the Project window with better visualization and organization tools.
 
+<img width="325" height="215" alt="image" src="https://github.com/user-attachments/assets/0723d831-1a07-4295-846f-958bd1e52300" />
+
 ## Features
 
 - **Content-Based Folder Icons**: Automatically adds small emblems to folder icons based on their contents (e.g., Scripts, Prefabs, Scenes, Materials).
@@ -19,14 +21,6 @@ Using the [openupm-cli](https://github.com/openupm/openupm-cli):
 openupm add com.gamespear.project-designer
 ```
 
-Or add the scoped registry manually in `Edit > Project Settings > Package Manager`:
-
-- **Name:** `package.openupm.com`
-- **URL:** `https://package.openupm.com`
-- **Scope(s):** `com.gamespear.project-designer`
-
-Then install **Project Designer** from `Window > Package Manager` (My Registries).
-
 ### Via Unity Package Manager (Git URL)
 
 1. Open Unity and go to `Window > Package Manager`.
@@ -37,11 +31,6 @@ Then install **Project Designer** from `Window > Package Manager` (My Registries
 ### Via .unitypackage
 
 Download the latest `.unitypackage` from the [Releases](https://github.com/APTEM591/com.gamespear.project-designer/releases) page and import it via `Assets > Import Package > Custom Package...`.
-
-### Via Local Folder
-
-1. Clone or download this repository.
-2. Add it via the Package Manager using `Add package from disk...` and selecting `package.json`, or copy the folder into your project's `Assets`.
 
 ## Usage & Settings
 
