@@ -1,0 +1,9 @@
+# Normalize line endings: store as LF in the repo, check out as LF everywhere.
+* text=auto eol=lf
+
+*.cs      text eol=lf
+*.asmdef  text eol=lf
+*.json    text eol=lf
+*.md      text eol=lf
+*.meta    text eol=lf
+*.txt     text eol=lf
