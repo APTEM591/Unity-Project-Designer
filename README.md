@@ -9,7 +9,7 @@ A lightweight, zero-dependency Unity Editor extension that enhances the Project 
 - **Content-Based Folder Icons**: Automatically adds small emblems to folder icons based on their contents (e.g., Scripts, Prefabs, Scenes, Materials).
 - **Custom Folder Colors**: Color-tint your folders to make them stand out. (Access via right-click context menu on any folder).
 - **Tree Branch Lines**: Adds visual connector lines to the project hierarchy in list view, making it easier to see parent-child relationships.
-- **Alternating Rows**: Adds subtle alternating background colors to rows in the list view for better readability.
+- **Alternating Rows**: Adds subtle alternating background colors to rows in the list view for better readability. The tint color (and its strength via alpha) is customizable in the Settings window.
 
 ## Installation
 

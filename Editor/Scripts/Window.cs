@@ -35,6 +35,8 @@ namespace GameSpear.ProjectDesigner.Editor
             DrawFolderColors();
             EditorGUILayout.Space(8f);
             DrawTree();
+            EditorGUILayout.Space(8f);
+            DrawRows();
             EditorGUILayout.Space(12f);
 
             if (GUILayout.Button("Reset to Defaults") &&
@@ -162,6 +164,15 @@ namespace GameSpear.ProjectDesigner.Editor
             if (GUILayout.Button(new GUIContent("✕", "Remove"), GUILayout.Width(22f))) remove = true;
             EditorGUILayout.EndHorizontal();
             return remove;
+        }
+
+        private static void DrawRows()
+        {
+            EditorGUILayout.LabelField("Alternating Rows", EditorStyles.boldLabel);
+            using (new EditorGUI.DisabledScope(!Settings.Enabled || !Settings.RowsEnabled))
+            {
+                Settings.RowColor = EditorGUILayout.ColorField(new GUIContent("Row Color", "Tint applied to every other row. Lower the alpha for subtler striping."), Settings.RowColor);
+            }
         }
 
         private static void DrawTree()

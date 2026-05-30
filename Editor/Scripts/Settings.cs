@@ -105,6 +105,12 @@ namespace GameSpear.ProjectDesigner.Editor
         }
         #endregion
 
+        #region Alternating Rows
+        // Tint applied to every other row. Falls back to a faint, skin-matched shade until the user picks
+        // one; alpha controls how subtle the striping is.
+        public static Color RowColor { get => GetColor("RowColor", Util.RowColor); set => SetColor("RowColor", value); }
+        #endregion
+
         #region Tree
         public static float IndentWidth { get => GetFloat("IndentWidth", 14f); set => SetFloat("IndentWidth", Mathf.Clamp(value, 8f, 24f)); }
         public static PD_TreeMode TreeMode { get => (PD_TreeMode)GetInt("TreeMode", (int)PD_TreeMode.Minimal); set => SetInt("TreeMode", (int)value); }
@@ -120,6 +126,8 @@ namespace GameSpear.ProjectDesigner.Editor
             FolderIconsEnabled = true;
             TreeEnabled = true;
             RowsEnabled = false;
+            // Drop any custom row tint so it reverts to the skin-matched default.
+            JsonSettingsManager.DeleteKey(Prefix + "RowColor");
             EmblemSize = 0.5f;
             EmblemCorner = EmblemCorner.BottomRight;
             RecursiveClassification = true;

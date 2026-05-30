@@ -6,7 +6,7 @@ namespace GameSpear.ProjectDesigner.Editor
 {
     internal static class Util
     {
-        // Faint alternating-row tint, matched to the editor skin.
+        // Default faint alternating-row tint, matched to the editor skin (used until the user picks a custom one).
         public static Color RowColor => EditorGUIUtility.isProSkin
             ? new Color(0f, 0f, 0f, 0.08f)
             : new Color(1f, 1f, 1f, 0.125f);

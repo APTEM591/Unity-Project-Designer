@@ -46,7 +46,7 @@ namespace GameSpear.ProjectDesigner.Editor
                 {
                     // Overshoot the reported view width so the stripe reaches the panel's right edge
                     // (it is clipped to the panel) rather than stopping a scrollbar-width short.
-                    Util.FillRect(new Rect(0f, selectionRect.y, EditorGUIUtility.currentViewWidth + 32f, selectionRect.height), Util.RowColor);
+                    Util.FillRect(new Rect(0f, selectionRect.y, EditorGUIUtility.currentViewWidth + 32f, selectionRect.height), Settings.RowColor);
                 }
             }
 
