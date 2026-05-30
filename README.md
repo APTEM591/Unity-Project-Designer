@@ -28,10 +28,6 @@ openupm add com.gamespear.project-designer
 3. Select `Add package from git URL...`.
 4. Enter: `https://github.com/APTEM591/com.gamespear.project-designer.git`
 
-### Via .unitypackage
-
-Download the latest `.unitypackage` from the [Releases](https://github.com/APTEM591/com.gamespear.project-designer/releases) page and import it via `Assets > Import Package > Custom Package...`.
-
 ## Usage & Settings
 
 All features are enabled by default. You can configure or toggle them at any time:
