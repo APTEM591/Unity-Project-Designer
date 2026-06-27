@@ -19,9 +19,25 @@ namespace GameSpear.ProjectDesigner.Editor
         public static bool Enabled { get => GetBool("Enabled", true); set => SetBool("Enabled", value); }
         public static bool FolderIconsEnabled { get => GetBool("FolderIcons", true); set => SetBool("FolderIcons", value); }
         public static bool TreeEnabled { get => GetBool("Tree", true); set => SetBool("Tree", value); }
-        // Off by default: alternating shading leaves a faint edge in the two-column layout.
-        public static bool RowsEnabled { get => GetBool("Rows", false); set => SetBool("Rows", value); }
+        // On by default (note: alternating shading can leave a faint edge in the two-column layout).
+        public static bool RowsEnabled { get => GetBool("Rows", true); set => SetBool("Rows", value); }
         public static bool FolderColorsEnabled { get => GetBool("FolderColors", true); set => SetBool("FolderColors", value); }
+        // Render a thumbnail for UI/Canvas prefabs (which Unity leaves blank) over their generic icon.
+        public static bool UiPreviewEnabled { get => GetBool("UiPreview", true); set => SetBool("UiPreview", value); }
+        // Render a short looping animation for particle-system prefabs over their generic icon.
+        public static bool ParticlePreviewEnabled { get => GetBool("ParticlePreview", true); set => SetBool("ParticlePreview", value); }
+        // Capture rate (frames sampled per second of effect) for particle preview animations. Higher = more
+        // frames / smoother (played back at real time), not faster. Changing it regenerates particle previews.
+        public static int ParticlePreviewFps
+        {
+            get => GetInt("ParticlePreviewFps", 12);
+            set
+            {
+                int clamped = Mathf.Clamp(value, 2, 24);
+                if (clamped != GetInt("ParticlePreviewFps", 12)) PrefabPreview.InvalidateParticles();
+                SetInt("ParticlePreviewFps", clamped);
+            }
+        }
         #endregion
 
         #region Folder Emblem
@@ -113,8 +129,8 @@ namespace GameSpear.ProjectDesigner.Editor
 
         #region Tree
         public static float IndentWidth { get => GetFloat("IndentWidth", 14f); set => SetFloat("IndentWidth", Mathf.Clamp(value, 8f, 24f)); }
-        public static PD_TreeMode TreeMode { get => (PD_TreeMode)GetInt("TreeMode", (int)PD_TreeMode.Minimal); set => SetInt("TreeMode", (int)value); }
-        public static PD_LineStyle LineStyle { get => (PD_LineStyle)GetInt("LineStyle", (int)PD_LineStyle.Dotted); set => SetInt("LineStyle", (int)value); }
+        public static PD_TreeMode TreeMode { get => (PD_TreeMode)GetInt("TreeMode", (int)PD_TreeMode.Default); set => SetInt("TreeMode", (int)value); }
+        public static PD_LineStyle LineStyle { get => (PD_LineStyle)GetInt("LineStyle", (int)PD_LineStyle.Solid); set => SetInt("LineStyle", (int)value); }
         public static float LineThickness { get => GetFloat("LineThickness", 1f); set => SetFloat("LineThickness", Mathf.Clamp(value, 1f, 3f)); }
         public static Color TreeColor { get => GetColor("TreeColor", new Color(1f, 1f, 1f, 0.43f)); set => SetColor("TreeColor", value); }
         #endregion
@@ -125,19 +141,22 @@ namespace GameSpear.ProjectDesigner.Editor
             Enabled = true;
             FolderIconsEnabled = true;
             TreeEnabled = true;
-            RowsEnabled = false;
-            // Drop any custom row tint so it reverts to the skin-matched default.
+            RowsEnabled = true;
+            // Drop any custom row tint so it reverts to the default.
             JsonSettingsManager.DeleteKey(Prefix + "RowColor");
             EmblemSize = 0.5f;
             EmblemCorner = EmblemCorner.BottomRight;
             RecursiveClassification = true;
             IndentWidth = 14f;
-            TreeMode = PD_TreeMode.Minimal;
-            LineStyle = PD_LineStyle.Dotted;
+            TreeMode = PD_TreeMode.Default;
+            LineStyle = PD_LineStyle.Solid;
             LineThickness = 1f;
             TreeColor = new Color(1f, 1f, 1f, 0.43f);
             FolderColorsEnabled = true;
             FolderColorStrength = 0.7f;
+            UiPreviewEnabled = true;
+            ParticlePreviewEnabled = true;
+            ParticlePreviewFps = 12;
             foreach (FolderIcon.ContentCategory category in FolderIcon.AllCategories)
             {
                 SetIconOverrideGuid(category, string.Empty);
@@ -194,6 +213,16 @@ namespace GameSpear.ProjectDesigner.Editor
         private static void ToggleFolderColors() => FolderColorsEnabled = !FolderColorsEnabled;
         [MenuItem(MenuRoot + "Folder Colors", validate = true)]
         private static bool ToggleFolderColorsValidate() { Menu.SetChecked(MenuRoot + "Folder Colors", FolderColorsEnabled); return Enabled; }
+
+        [MenuItem(MenuRoot + "UI Previews", priority = 25)]
+        private static void ToggleUiPreview() => UiPreviewEnabled = !UiPreviewEnabled;
+        [MenuItem(MenuRoot + "UI Previews", validate = true)]
+        private static bool ToggleUiPreviewValidate() { Menu.SetChecked(MenuRoot + "UI Previews", UiPreviewEnabled); return Enabled; }
+
+        [MenuItem(MenuRoot + "Particle Previews", priority = 26)]
+        private static void ToggleParticlePreview() => ParticlePreviewEnabled = !ParticlePreviewEnabled;
+        [MenuItem(MenuRoot + "Particle Previews", validate = true)]
+        private static bool ToggleParticlePreviewValidate() { Menu.SetChecked(MenuRoot + "Particle Previews", ParticlePreviewEnabled); return Enabled; }
         #endregion
     }
 }

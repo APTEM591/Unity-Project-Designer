@@ -1,0 +1,591 @@
+#if UNITY_EDITOR
+using System.Collections.Generic;
+using UnityEditor;
+using UnityEditor.SceneManagement;
+using UnityEngine;
+using UnityEngine.SceneManagement;
+
+namespace GameSpear.ProjectDesigner.Editor
+{
+    // Renders previews for prefabs that Unity's built-in AssetPreview leaves blank. Unity already
+    // thumbnails mesh/sprite/etc. prefabs in the Project window, so re-drawing those adds nothing. Two
+    // kinds genuinely show only the generic icon, and this fills both, leaving everything else to Unity:
+    //
+    //   * UI / Canvas prefabs  — a single rendered thumbnail (AssetPreview never renders screen-space UI).
+    //   * Particle systems     — a short looping animation (AssetPreview shows them un-simulated / empty).
+    //
+    // Both are rendered in an isolated preview scene via a camera bound to that scene (Camera.scene), read
+    // back into an owned Texture2D. Particle frames are pre-simulated and packed into one horizontal atlas;
+    // the Project window cycles through them. PreviewRenderUtility can't do either — UGUI only emits
+    // geometry for a camera attached to a real/preview scene, not PRU's internal camera.
+    //
+    // Cost is kept off the GUI thread: a prefab is rendered at most once (deferred to a one-per-tick work
+    // queue) and cached per GUID, keyed by the asset's dependency hash so edits regenerate. The animation
+    // only drives repaints while a particle preview is actually on screen. We own the cached textures, so
+    // they are destroyed on eviction / cache clear to avoid leaks.
+    internal static class PrefabPreview
+    {
+        private enum Kind { None, Ui, Particle }
+
+        private const int ThumbSize = 128;
+        private const int MaxCache = 256;
+        private const int MinParticleFrames = 6;        // floor on captured frames (very short loops)
+        private const int MaxParticleFrames = 36;       // cap on captured frames (atlas width = N * ThumbSize)
+        private const double AnimVisibleWindow = 0.5;   // keep animating this long after the last visible frame
+
+        // Opaque neutral backdrop (≈ AssetPreview's) so the thumbnail fully covers the generic icon.
+        private static readonly Color Background = new Color(0.32f, 0.32f, 0.32f, 1f);
+
+        private static readonly Dictionary<string, Texture2D> _cache = new();
+        private static readonly Dictionary<string, Hash128> _hashes = new();
+        private static readonly Dictionary<string, Hash128> _failed = new();
+        private static readonly Dictionary<string, Kind> _kind = new();
+        private static readonly Dictionary<string, int> _frames = new();    // particle: captured frame count
+        private static readonly Dictionary<string, float> _fps = new();     // particle: real-time playback rate
+        private static readonly List<string> _lru = new();
+        private static readonly List<string> _queue = new();
+        private static readonly HashSet<string> _queued = new();
+        private static bool _hooked;
+        private static double _animVisibleTime;   // last time an animated preview was drawn
+        private static double _lastAnimRepaint;
+
+        public static void Initialize()
+        {
+            // Keep Unity's own (mesh/sprite) previews from dropping out while scrolling large folders.
+            try { AssetPreview.SetPreviewTextureCacheSize(256); }
+            catch { /* non-fatal */ }
+
+            if (!_hooked) { _hooked = true; EditorApplication.update += OnEditorUpdate; }
+        }
+
+        public static bool IsPrefab(string path)
+            => !string.IsNullOrEmpty(path) && path.EndsWith(".prefab", System.StringComparison.OrdinalIgnoreCase);
+
+        public static void ClearCache()
+        {
+            foreach (Texture2D tex in _cache.Values)
+                if (tex != null) UnityEngine.Object.DestroyImmediate(tex);
+            _cache.Clear();
+            _hashes.Clear();
+            _failed.Clear();
+            _kind.Clear();
+            _frames.Clear();
+            _fps.Clear();
+            _lru.Clear();
+            _queue.Clear();
+            _queued.Clear();
+        }
+
+        // Drop cached particle previews so they regenerate at the current capture rate (called when the
+        // Animation FPS setting changes). Classification is kept and UI previews are left untouched.
+        public static void InvalidateParticles()
+        {
+            List<string> particles = new();
+            foreach (KeyValuePair<string, Kind> kv in _kind)
+                if (kv.Value == Kind.Particle) particles.Add(kv.Key);
+
+            foreach (string guid in particles)
+            {
+                if (_cache.TryGetValue(guid, out Texture2D tex) && tex != null)
+                    UnityEngine.Object.DestroyImmediate(tex);
+                _cache.Remove(guid);
+                _hashes.Remove(guid);
+                _failed.Remove(guid);
+                _frames.Remove(guid);
+                _fps.Remove(guid);
+                _lru.Remove(guid);
+            }
+            EditorApplication.RepaintProjectWindow();
+        }
+
+        // A custom thumbnail for a prefab Unity can't preview (UI or particle), or false to leave Unity's
+        // native preview / generic icon untouched. 'uv' selects the current animation frame within the
+        // texture (the whole texture for static UI thumbnails). Enqueues generation when not yet cached or
+        // when the cached copy has gone stale.
+        public static bool TryGetPreview(string guid, out Texture2D tex, out Rect uv)
+        {
+            tex = null;
+            uv = new Rect(0f, 0f, 1f, 1f);
+            if (string.IsNullOrEmpty(guid)) return false;
+            string path = AssetDatabase.GUIDToAssetPath(guid);
+            if (string.IsNullOrEmpty(path)) return false;
+
+            if (!Settings.UiPreviewEnabled && !Settings.ParticlePreviewEnabled) return false;
+
+            Kind kind = ClassifyCached(guid, path);
+            if (kind == Kind.None) return false;
+            if (kind == Kind.Ui && !Settings.UiPreviewEnabled) return false;
+            if (kind == Kind.Particle && !Settings.ParticlePreviewEnabled) return false;
+
+            Hash128 hash = AssetDatabase.GetAssetDependencyHash(path);
+            if (_cache.TryGetValue(guid, out Texture2D cachedTex) && cachedTex != null &&
+                _hashes.TryGetValue(guid, out Hash128 cachedHash) && cachedHash == hash)
+            {
+                Touch(guid);
+                tex = cachedTex;
+                if (kind == Kind.Particle)
+                {
+                    uv = CurrentFrameUv(guid);
+                    _animVisibleTime = EditorApplication.timeSinceStartup; // keep the animation pumping
+                }
+                return true;
+            }
+
+            // Already failed to render at this hash (e.g. an empty Canvas or a system that emits nothing) —
+            // keep the generic icon and don't re-queue every repaint until the asset changes.
+            if (_failed.TryGetValue(guid, out Hash128 failedHash) && failedHash == hash) return false;
+
+            if (_queued.Add(guid)) _queue.Add(guid);
+            return false;
+        }
+
+        // The atlas sub-rect for the frame that should show right now, using the frame count and real-time
+        // playback rate captured for this prefab. All previews share the editor clock, so they stay in sync.
+        private static Rect CurrentFrameUv(string guid)
+        {
+            if (!_frames.TryGetValue(guid, out int frames) || frames <= 0)
+                return new Rect(0f, 0f, 1f, 1f);
+            float fps = _fps.TryGetValue(guid, out float f) && f > 0f ? f : 12f;
+            int frame = (int)(EditorApplication.timeSinceStartup * fps) % frames;
+            if (frame < 0) frame += frames;
+            return new Rect((float)frame / frames, 0f, 1f / frames, 1f);
+        }
+
+        // What kind of preview, if any, we should render for this prefab. Cached per GUID — the only place
+        // we load the prefab asset, and only for visible prefabs.
+        private static Kind ClassifyCached(string guid, string path)
+        {
+            if (_kind.TryGetValue(guid, out Kind k)) return k;
+            GameObject go = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+            k = Kind.None;
+            if (go != null)
+            {
+                if (go.GetComponentInChildren<Canvas>(true) != null &&
+                    go.GetComponentInChildren<CanvasRenderer>(true) != null)
+                    k = Kind.Ui;
+                else if (go.GetComponentInChildren<ParticleSystem>(true) != null)
+                    k = Kind.Particle;
+            }
+            _kind[guid] = k;
+            return k;
+        }
+
+        private static void OnEditorUpdate()
+        {
+            // Drive the particle animation: repaint the Project window at a throttled rate, but only while
+            // an animated preview was recently on screen (so idle folders cost nothing).
+            double now = EditorApplication.timeSinceStartup;
+            double interval = 1.0 / Mathf.Max(1, Settings.ParticlePreviewFps);
+            if (now - _animVisibleTime < AnimVisibleWindow && now - _lastAnimRepaint >= interval)
+            {
+                _lastAnimRepaint = now;
+                EditorApplication.RepaintProjectWindow();
+            }
+
+            ProcessQueue();
+        }
+
+        private static void ProcessQueue()
+        {
+            if (_queue.Count == 0) return;
+            // Generating during play mode would run the prefab's scripts inside the running game; defer.
+            if (EditorApplication.isPlayingOrWillChangePlaymode) return;
+
+            string guid = _queue[0];
+            _queue.RemoveAt(0);
+            _queued.Remove(guid);
+
+            string path = AssetDatabase.GUIDToAssetPath(guid);
+            if (string.IsNullOrEmpty(path)) return;
+
+            Kind kind = ClassifyCached(guid, path);
+            if (kind == Kind.None) return;
+
+            Hash128 hash = AssetDatabase.GetAssetDependencyHash(path);
+            int frames = 0;
+            float fps = 0f;
+            Texture2D tex = kind == Kind.Particle ? RenderParticle(path, out frames, out fps) : RenderUi(path);
+            if (tex != null)
+            {
+                Store(guid, tex, hash);
+                if (kind == Kind.Particle) { _frames[guid] = frames; _fps[guid] = fps; }
+                _failed.Remove(guid);
+            }
+            else { _failed[guid] = hash; }
+
+            EditorApplication.RepaintProjectWindow();
+        }
+
+        private static void Store(string guid, Texture2D tex, Hash128 hash)
+        {
+            if (_cache.TryGetValue(guid, out Texture2D old) && old != null && old != tex)
+                UnityEngine.Object.DestroyImmediate(old);
+
+            _cache[guid] = tex;
+            _hashes[guid] = hash;
+            Touch(guid);
+
+            while (_lru.Count > MaxCache)
+            {
+                string evict = _lru[0];
+                _lru.RemoveAt(0);
+                if (_cache.TryGetValue(evict, out Texture2D t))
+                {
+                    if (t != null) UnityEngine.Object.DestroyImmediate(t);
+                    _cache.Remove(evict);
+                    _hashes.Remove(evict);
+                    _frames.Remove(evict);
+                    _fps.Remove(evict);
+                }
+            }
+        }
+
+        private static void Touch(string guid)
+        {
+            _lru.Remove(guid);
+            _lru.Add(guid);
+        }
+
+        // Renders a UI prefab to an owned Texture2D via an isolated preview scene. Returns null on any
+        // failure (e.g. an empty Canvas), leaving the generic icon in place.
+        private static Texture2D RenderUi(string path)
+        {
+            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+            if (prefab == null) return null;
+
+            Scene scene = default;
+            RenderTexture rt = null;
+            RenderTexture prevActive = RenderTexture.active;
+            GameObject instance = null;
+            try
+            {
+                scene = EditorSceneManager.NewPreviewScene();
+                instance = UnityEngine.Object.Instantiate(prefab);
+                SceneManager.MoveGameObjectToScene(instance, scene);
+
+                Canvas canvas = instance.GetComponentInChildren<Canvas>(true);
+                if (canvas == null) return null;
+                canvas.renderMode = RenderMode.WorldSpace;
+
+                RectTransform canvasRect = canvas.GetComponent<RectTransform>();
+                if (canvasRect != null && (canvasRect.rect.width < 1f || canvasRect.rect.height < 1f))
+                    canvasRect.sizeDelta = new Vector2(400f, 400f);
+
+                GameObject camGo = new GameObject("PD_PreviewCamera");
+                SceneManager.MoveGameObjectToScene(camGo, scene);
+                Camera cam = camGo.AddComponent<Camera>();
+                cam.scene = scene; // bind the camera to the preview scene so it (and only it) renders the UI
+                canvas.worldCamera = cam;
+
+                Canvas.ForceUpdateCanvases();
+
+                if (!TryGetUiBounds(instance, canvas, out Bounds b)) return null;
+
+                cam.orthographic = true;
+                cam.orthographicSize = Mathf.Max(b.extents.x, b.extents.y, 0.01f) * 1.1f;
+                cam.transform.position = b.center + new Vector3(0f, 0f, -50f);
+                cam.transform.rotation = Quaternion.LookRotation(Vector3.forward, Vector3.up);
+                cam.nearClipPlane = 0.01f;
+                cam.farClipPlane = 1000f;
+                cam.clearFlags = CameraClearFlags.SolidColor;
+                cam.backgroundColor = Background;
+                cam.cullingMask = ~0;
+
+                rt = RenderTexture.GetTemporary(ThumbSize, ThumbSize, 16, RenderTextureFormat.ARGB32);
+                cam.targetTexture = rt;
+                cam.Render();
+                cam.targetTexture = null;
+
+                RenderTexture.active = rt;
+                Texture2D tex = new Texture2D(ThumbSize, ThumbSize, TextureFormat.RGBA32, false)
+                {
+                    hideFlags = HideFlags.HideAndDontSave
+                };
+                tex.ReadPixels(new Rect(0f, 0f, ThumbSize, ThumbSize), 0, 0);
+                tex.Apply();
+                return tex;
+            }
+            catch
+            {
+                return null;
+            }
+            finally
+            {
+                RenderTexture.active = prevActive;
+                if (rt != null) RenderTexture.ReleaseTemporary(rt);
+                if (instance != null) UnityEngine.Object.DestroyImmediate(instance);
+                if (scene.IsValid()) EditorSceneManager.ClosePreviewScene(scene);
+            }
+        }
+
+        // Renders a particle prefab to an owned horizontal atlas Texture2D ('frameCount' columns of
+        // ThumbSize) by simulating the system across one loop, sampling more frames at higher capture FPS.
+        // 'playbackFps' is the real-time rate to cycle those frames at. Returns null when there's nothing to
+        // show (no renderers, or the captured frames are effectively empty), leaving the generic icon.
+        private static Texture2D RenderParticle(string path, out int frameCount, out float playbackFps)
+        {
+            frameCount = 0;
+            playbackFps = 0f;
+
+            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+            if (prefab == null) return null;
+
+            Scene scene = default;
+            RenderTexture rt = null;
+            RenderTexture prevActive = RenderTexture.active;
+            GameObject instance = null;
+            GameObject camGo = null;
+            GameObject lightGo = null;
+            Texture2D atlas = null;
+            try
+            {
+                scene = EditorSceneManager.NewPreviewScene();
+                instance = UnityEngine.Object.Instantiate(prefab);
+                SceneManager.MoveGameObjectToScene(instance, scene);
+
+                // Root systems are those not driven by a parent system (their children are simulated along
+                // with them via Simulate(withChildren)). Fixing the random seed makes the captured frames a
+                // smooth, repeatable loop instead of a different roll per frame.
+                List<ParticleSystem> roots = new();
+                foreach (ParticleSystem ps in instance.GetComponentsInChildren<ParticleSystem>(true))
+                {
+                    ps.useAutoRandomSeed = false;
+                    Transform parent = ps.transform.parent;
+                    if (parent == null || parent.GetComponentInParent<ParticleSystem>() == null)
+                        roots.Add(ps);
+                }
+                if (roots.Count == 0) return null;
+
+                // Choose the time window to animate. Looping systems: pre-roll to steady state and span one
+                // duration (so the loop tiles seamlessly). One-shot / burst systems: start at emission with
+                // NO warm-up and span the full lifecycle — warming up past the burst is exactly why bursts
+                // showed up empty, since the burst fires at its time and its particles are already dead by
+                // the time a lifetime-long warm-up finishes.
+                float maxLife = 0f, maxDur = 0f, maxEmit = 0f;
+                bool anyLoop = false;
+                foreach (ParticleSystem ps in roots)
+                {
+                    ParticleSystem.MainModule m = ps.main;
+                    maxLife = Mathf.Max(maxLife, MaxLifetime(m));
+                    maxDur = Mathf.Max(maxDur, m.duration);
+                    maxEmit = Mathf.Max(maxEmit, EmissionEndTime(ps));
+                    anyLoop |= m.loop;
+                }
+                // Non-looping span ends when the last particle dies: (when emission stops) + lifetime. For a
+                // single t=0 burst that's just the lifetime, so the whole strip animates instead of going
+                // dead halfway through.
+                float warm = anyLoop ? Mathf.Clamp(maxLife, 0f, 4f) : 0f;
+                float loop = Mathf.Clamp(anyLoop ? maxDur : maxEmit + maxLife, 0.25f, 6f);
+
+                // Capture one frame per (1 / FPS) seconds of effect time, so a higher FPS samples MORE frames
+                // (a smoother animation) rather than a faster one — the strip is played back at real time
+                // (playbackFps = frames / loop), so the speed stays constant and only the smoothness changes.
+                int fps = Mathf.Clamp(Settings.ParticlePreviewFps, 1, 60);
+                int frames = Mathf.Clamp(Mathf.RoundToInt(loop * fps), MinParticleFrames, MaxParticleFrames);
+                float step = loop / frames;
+                frameCount = frames;
+                playbackFps = frames / loop;
+
+                // Pass 1: pre-roll, then step through the loop accumulating renderer bounds for a stable
+                // framing. We capture AFTER each step (not before), so frame 0 already shows the emitted /
+                // burst particles rather than an empty system at t=0.
+                Simulate(roots, warm, true);
+                Bounds b = default;
+                bool anyBounds = false;
+                for (int i = 0; i < frames; i++)
+                {
+                    Simulate(roots, step, false);
+                    if (TryGetParticleBounds(instance, out Bounds fb))
+                    {
+                        if (!anyBounds) { b = fb; anyBounds = true; }
+                        else b.Encapsulate(fb);
+                    }
+                }
+                if (!anyBounds) return null;
+
+                camGo = new GameObject("PD_PreviewCamera");
+                SceneManager.MoveGameObjectToScene(camGo, scene);
+                Camera cam = camGo.AddComponent<Camera>();
+                cam.scene = scene;
+                cam.clearFlags = CameraClearFlags.SolidColor;
+                cam.backgroundColor = Background;
+                cam.cullingMask = ~0;
+                cam.fieldOfView = 30f;
+                cam.nearClipPlane = 0.01f;
+                cam.farClipPlane = 5000f;
+                float radius = Mathf.Max(b.extents.magnitude, 0.05f);
+                float dist = radius / Mathf.Sin(cam.fieldOfView * 0.5f * Mathf.Deg2Rad) + radius;
+                cam.transform.position = b.center - Vector3.forward * dist;
+                cam.transform.rotation = Quaternion.LookRotation(Vector3.forward, Vector3.up);
+
+                lightGo = new GameObject("PD_PreviewLight");
+                SceneManager.MoveGameObjectToScene(lightGo, scene);
+                Light light = lightGo.AddComponent<Light>();
+                light.type = LightType.Directional;
+                light.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
+                light.intensity = 1f;
+
+                atlas = new Texture2D(ThumbSize * frames, ThumbSize, TextureFormat.RGBA32, false)
+                {
+                    hideFlags = HideFlags.HideAndDontSave,
+                    filterMode = FilterMode.Bilinear
+                };
+                rt = RenderTexture.GetTemporary(ThumbSize, ThumbSize, 16, RenderTextureFormat.ARGB32);
+                cam.targetTexture = rt;
+
+                // Pass 2: replay the same simulation, capturing each frame into its atlas column (advance
+                // first, mirroring pass 1, so the captured frames line up with the bounds we computed).
+                Simulate(roots, warm, true);
+                for (int i = 0; i < frames; i++)
+                {
+                    Simulate(roots, step, false);
+                    CaptureFrame(cam, rt, atlas, i);
+                }
+                cam.targetTexture = null;
+                atlas.Apply();
+
+                if (LooksEmpty(atlas)) return null;
+
+                Texture2D result = atlas;
+                atlas = null; // ownership handed to the cache; don't destroy it in 'finally'
+                return result;
+            }
+            catch
+            {
+                return null;
+            }
+            finally
+            {
+                RenderTexture.active = prevActive;
+                if (rt != null) RenderTexture.ReleaseTemporary(rt);
+                if (atlas != null) UnityEngine.Object.DestroyImmediate(atlas);
+                if (camGo != null) UnityEngine.Object.DestroyImmediate(camGo);
+                if (lightGo != null) UnityEngine.Object.DestroyImmediate(lightGo);
+                if (instance != null) UnityEngine.Object.DestroyImmediate(instance);
+                if (scene.IsValid()) EditorSceneManager.ClosePreviewScene(scene);
+            }
+        }
+
+        // Advance each root system by 't' seconds (restart=true simulates from zero; restart=false steps on
+        // from the current state so successive captures form a continuous animation).
+        private static void Simulate(List<ParticleSystem> roots, float t, bool restart)
+        {
+            foreach (ParticleSystem ps in roots)
+                ps.Simulate(t, true, restart, true);
+        }
+
+        private static void CaptureFrame(Camera cam, RenderTexture rt, Texture2D atlas, int frame)
+        {
+            cam.Render();
+            RenderTexture.active = rt;
+            atlas.ReadPixels(new Rect(0f, 0f, ThumbSize, ThumbSize), frame * ThumbSize, 0);
+        }
+
+        // Best-effort time at which a system stops emitting, used to size one-shot loops. Continuous
+        // emission (rate over time/distance) runs for the whole duration; bursts run until their last cycle.
+        private static float EmissionEndTime(ParticleSystem ps)
+        {
+            ParticleSystem.MainModule main = ps.main;
+            ParticleSystem.EmissionModule em = ps.emission;
+            if (!em.enabled) return main.duration;
+
+            float end = 0f;
+            if (CurveMax(em.rateOverTime) > 0f || CurveMax(em.rateOverDistance) > 0f)
+                end = main.duration;
+
+            int count = em.burstCount;
+            for (int i = 0; i < count; i++)
+            {
+                ParticleSystem.Burst burst = em.GetBurst(i);
+                float burstEnd = burst.cycleCount == 0
+                    ? main.duration // repeats for the whole duration
+                    : burst.time + Mathf.Max(0, burst.cycleCount - 1) * burst.repeatInterval;
+                end = Mathf.Max(end, burstEnd);
+            }
+            return end;
+        }
+
+        private static float CurveMax(ParticleSystem.MinMaxCurve c) => Mathf.Max(c.constant, c.constantMax);
+
+        // Best-effort upper bound on a system's particle lifetime, used to warm up and to size one-shot loops.
+        private static float MaxLifetime(ParticleSystem.MainModule m)
+        {
+            ParticleSystem.MinMaxCurve c = m.startLifetime;
+            switch (c.mode)
+            {
+                case ParticleSystemCurveMode.Constant: return Mathf.Max(c.constant, 0.1f);
+                case ParticleSystemCurveMode.TwoConstants: return Mathf.Max(c.constantMax, 0.1f);
+                default: return Mathf.Max(c.constant, c.constantMax, 1f);
+            }
+        }
+
+        // World bounds of the currently-simulated particle renderers, used to frame the camera.
+        private static bool TryGetParticleBounds(GameObject instance, out Bounds bounds)
+        {
+            bounds = default;
+            bool any = false;
+            foreach (Renderer r in instance.GetComponentsInChildren<Renderer>(true))
+            {
+                if (!r.enabled) continue;
+                Bounds rb = r.bounds;
+                if (rb.size == Vector3.zero) continue;
+                if (!any) { bounds = rb; any = true; }
+                else bounds.Encapsulate(rb);
+            }
+            return any;
+        }
+
+        // Sparse check for "the render is basically just the background" so we keep the generic icon instead
+        // of showing a flat gray square (e.g. a system that emits nothing under simulation).
+        private static bool LooksEmpty(Texture2D atlas)
+        {
+            Color32[] px = atlas.GetPixels32();
+            Color32 bg = Background;
+            int differing = 0;
+            for (int i = 0; i < px.Length; i += 97)
+            {
+                Color32 p = px[i];
+                if (Mathf.Abs(p.r - bg.r) + Mathf.Abs(p.g - bg.g) + Mathf.Abs(p.b - bg.b) > 24)
+                {
+                    if (++differing >= 12) return false;
+                }
+            }
+            return true;
+        }
+
+        // World-space bounds of the Canvas's drawable elements, used to frame the camera.
+        private static bool TryGetUiBounds(GameObject instance, Canvas canvas, out Bounds bounds)
+        {
+            bounds = default;
+            bool any = false;
+            Vector3[] corners = new Vector3[4];
+
+            foreach (CanvasRenderer cr in instance.GetComponentsInChildren<CanvasRenderer>(true))
+            {
+                RectTransform rt = cr.GetComponent<RectTransform>();
+                if (rt == null) continue;
+                rt.GetWorldCorners(corners);
+                foreach (Vector3 c in corners)
+                {
+                    if (!any) { bounds = new Bounds(c, Vector3.zero); any = true; }
+                    else bounds.Encapsulate(c);
+                }
+            }
+
+            if (!any && canvas != null)
+            {
+                RectTransform crt = canvas.GetComponent<RectTransform>();
+                if (crt != null)
+                {
+                    crt.GetWorldCorners(corners);
+                    bounds = new Bounds(corners[0], Vector3.zero);
+                    foreach (Vector3 c in corners) bounds.Encapsulate(c);
+                    any = bounds.size.sqrMagnitude > 0f;
+                }
+            }
+
+            return any;
+        }
+    }
+}
+#endif

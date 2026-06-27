@@ -19,12 +19,14 @@ namespace GameSpear.ProjectDesigner.Editor
             EditorApplication.projectWindowItemOnGUI += OnProjectWindowItemGUI;
             EditorApplication.projectChanged -= OnProjectChanged;
             EditorApplication.projectChanged += OnProjectChanged;
+            PrefabPreview.Initialize();
         }
 
         private static void OnProjectChanged()
         {
             FolderIcon.ClearCache();
             Tree.ClearCache();
+            PrefabPreview.ClearCache();
         }
 
         private static void OnProjectWindowItemGUI(string guid, Rect selectionRect)
@@ -72,14 +74,28 @@ namespace GameSpear.ProjectDesigner.Editor
                 isInTreeView = (visualDepth == itemDepth);
             }
 
-            // 3. Folder color: recolor the folder icon for folders the user has assigned a color.
+            // 3. Prefab preview: draw a custom thumbnail for prefabs Unity leaves blank (UI/Canvas) and an
+            //    animated one for particle systems, in both list and grid layouts. TryGetPreview returns
+            //    true only for those (respecting each type's toggle, with 'uv' selecting the current
+            //    animation frame); every other prefab keeps Unity's own native preview / generic icon.
+            if (!isFolder && PrefabPreview.IsPrefab(path) &&
+                PrefabPreview.TryGetPreview(guid, out Texture2D preview, out Rect previewUv))
+            {
+                Rect iconRect = GetIconRect(selectionRect, isListMode, isInTreeView);
+                Color previousColor = GUI.color;
+                GUI.color = Color.white;
+                GUI.DrawTextureWithTexCoords(iconRect, preview, previewUv);
+                GUI.color = previousColor;
+            }
+
+            // 4. Folder color: recolor the folder icon for folders the user has assigned a color.
             if (Settings.FolderColorsEnabled && isFolder &&
                 Settings.TryGetFolderColor(guid, out Color folderColor))
             {
                 Texture2D folderTex = Util.FolderIcon;
                 if (folderTex != null)
                 {
-                    Rect iconRect = GetFolderIconRect(selectionRect, isListMode, isInTreeView);
+                    Rect iconRect = GetIconRect(selectionRect, isListMode, isInTreeView);
                     Color previousColor = GUI.color;
                     // Multiply tint via GUI.color, drawn at the configured strength (used as alpha) over
                     // Unity's own folder icon, so the result blends toward a soft tint rather than a hard,
@@ -90,7 +106,7 @@ namespace GameSpear.ProjectDesigner.Editor
                 }
             }
 
-            // 4. Content-based folder icons: a small emblem over the folder icon's corner, keeping
+            // 5. Content-based folder icons: a small emblem over the folder icon's corner, keeping
             //    Unity's folder icon (skip the "Assets"/"Packages" roots at depth 0).
             if (Settings.FolderIconsEnabled && isFolder && GetDepth(path) >= 1)
             {
@@ -100,7 +116,7 @@ namespace GameSpear.ProjectDesigner.Editor
                     Texture2D icon = FolderIcon.GetCategoryIcon(category);
                     if (icon != null)
                     {
-                        Rect iconRect = GetFolderIconRect(selectionRect, isListMode, isInTreeView);
+                        Rect iconRect = GetIconRect(selectionRect, isListMode, isInTreeView);
                         Rect emblem = GetEmblemRect(iconRect);
                         Color previousColor = GUI.color;
 
@@ -121,12 +137,12 @@ namespace GameSpear.ProjectDesigner.Editor
             }
         }
 
-        // The folder icon's square within an item's rect: a 16px icon at selectionRect.x, vertically
+        // The asset icon's square within an item's rect: a 16px icon at selectionRect.x, vertically
         // centered, in list mode; or the top (width-sized) square of the cell in grid mode (the extra
-        // cell height below it is the label).
+        // cell height below it is the label). Used for folder recolor/emblems and for prefab previews.
         // In two-column mode's right panel, items are shown flat and visualDepth != itemDepth.
         // We must recalculate icon position based on tree depth for consistency.
-        private static Rect GetFolderIconRect(Rect selectionRect, bool isListMode, bool isInTreeView)
+        private static Rect GetIconRect(Rect selectionRect, bool isListMode, bool isInTreeView)
         {
             if (isListMode)
             {

@@ -6,10 +6,8 @@ namespace GameSpear.ProjectDesigner.Editor
 {
     internal static class Util
     {
-        // Default faint alternating-row tint, matched to the editor skin (used until the user picks a custom one).
-        public static Color RowColor => EditorGUIUtility.isProSkin
-            ? new Color(0f, 0f, 0f, 0.08f)
-            : new Color(1f, 1f, 1f, 0.125f);
+        // Default faint alternating-row tint (#0000002A), used until the user picks a custom one.
+        public static Color RowColor => new Color(0f, 0f, 0f, 0.165f);
 
         // The built-in folder icon (dark-skin variant on Pro), re-drawn tinted to recolor folders.
         public static Texture2D FolderIcon => LoadBuiltinIcon("Folder Icon");

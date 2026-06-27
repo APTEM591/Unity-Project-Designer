@@ -7,6 +7,7 @@ A lightweight, zero-dependency Unity Editor extension that enhances the Project 
 ## Features
 
 - **Content-Based Folder Icons**: Automatically adds small emblems to folder icons based on their contents (e.g., Scripts, Prefabs, Scenes, Materials).
+- **Prefab Previews**: Unity already thumbnails mesh and sprite prefabs, but leaves UI/Canvas prefabs as a plain blue icon and shows particle systems un-simulated. This renders those in an isolated preview scene so UI prefabs get a real thumbnail and particle systems get a short looping animation (list and grid views). Generated lazily off the GUI thread and cached to stay lightweight; animation only repaints while a particle preview is on screen, and other prefabs keep Unity's own preview.
 - **Custom Folder Colors**: Color-tint your folders to make them stand out. (Access via right-click context menu on any folder).
 - **Tree Branch Lines**: Adds visual connector lines to the project hierarchy in list view, making it easier to see parent-child relationships.
 - **Alternating Rows**: Adds subtle alternating background colors to rows in the list view for better readability. The tint color (and its strength via alpha) is customizable in the Settings window.
@@ -27,6 +28,10 @@ openupm add com.gamespear.project-designer
 2. Click the `+` button in the top-left corner.
 3. Select `Add package from git URL...`.
 4. Enter: `https://github.com/APTEM591/com.gamespear.project-designer.git`
+
+### Via .unitypackage
+
+Download the latest `.unitypackage` from the [Releases](https://github.com/APTEM591/com.gamespear.project-designer/releases) page and import it via `Assets > Import Package > Custom Package...`.
 
 ## Usage & Settings
 

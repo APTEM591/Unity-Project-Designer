@@ -11,6 +11,9 @@ namespace GameSpear.ProjectDesigner.Editor
     {
         private Vector2 _scroll;
 
+        // Above this capture rate, warn that previews get heavier (more frames per atlas, more repaints).
+        private const int HighFpsWarning = 18;
+
         [MenuItem("Window/Project Designer")]
         public static void Open()
         {
@@ -59,6 +62,16 @@ namespace GameSpear.ProjectDesigner.Editor
                 Settings.TreeEnabled = EditorGUILayout.Toggle("Tree Branch Lines", Settings.TreeEnabled);
                 Settings.RowsEnabled = EditorGUILayout.Toggle(new GUIContent("Alternating Rows", "Faint row striping. Best in one-column layout."), Settings.RowsEnabled);
                 Settings.FolderColorsEnabled = EditorGUILayout.Toggle(new GUIContent("Folder Colors", "Tint specific folders' icons a custom color."), Settings.FolderColorsEnabled);
+                Settings.UiPreviewEnabled = EditorGUILayout.Toggle(new GUIContent("UI Prefab Previews", "Render a thumbnail for UI/Canvas prefabs, which Unity leaves blank in the Project window. Other prefabs use Unity's own preview."), Settings.UiPreviewEnabled);
+                Settings.ParticlePreviewEnabled = EditorGUILayout.Toggle(new GUIContent("Particle Previews", "Render a short looping animation for particle-system prefabs, which Unity shows un-simulated."), Settings.ParticlePreviewEnabled);
+                using (new EditorGUI.DisabledScope(!Settings.ParticlePreviewEnabled))
+                {
+                    EditorGUI.indentLevel++;
+                    Settings.ParticlePreviewFps = EditorGUILayout.IntSlider(new GUIContent("Animation FPS", "Frames sampled per second of the effect. Higher captures MORE frames (smoother) — the preview always plays at real-time speed, so it doesn't get faster. Repaints only while a particle preview is visible."), Settings.ParticlePreviewFps, 2, 24);
+                    if (Settings.ParticlePreviewEnabled && Settings.ParticlePreviewFps >= HighFpsWarning)
+                        EditorGUILayout.HelpBox("High FPS captures more frames per preview (more memory, slower to generate) and repaints the Project window more often while a particle preview is visible. 12 is usually plenty.", MessageType.Warning);
+                    EditorGUI.indentLevel--;
+                }
             }
         }
 
