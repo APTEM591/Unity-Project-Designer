@@ -20,9 +20,9 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/APTEM591/com.gamespear.project-designer.git"
+    "url": "https://github.com/APTEM591/Unity-Project-Designer.git"
   },
-  "documentationUrl": "https://github.com/APTEM591/com.gamespear.project-designer#readme",
-  "changelogUrl": "https://github.com/APTEM591/com.gamespear.project-designer/blob/main/CHANGELOG.md",
-  "licensesUrl": "https://github.com/APTEM591/com.gamespear.project-designer/blob/main/LICENSE.md"
+  "documentationUrl": "https://github.com/APTEM591/Unity-Project-Designer#readme",
+  "changelogUrl": "https://github.com/APTEM591/Unity-Project-Designer/blob/main/CHANGELOG.md",
+  "licensesUrl": "https://github.com/APTEM591/Unity-Project-Designer/blob/main/LICENSE.md"
 }

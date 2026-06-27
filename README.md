@@ -27,11 +27,11 @@ openupm add com.gamespear.project-designer
 1. Open Unity and go to `Window > Package Manager`.
 2. Click the `+` button in the top-left corner.
 3. Select `Add package from git URL...`.
-4. Enter: `https://github.com/APTEM591/com.gamespear.project-designer.git`
+4. Enter: `https://github.com/APTEM591/Unity-Project-Designer.git`
 
 ### Via .unitypackage
 
-Download the latest `.unitypackage` from the [Releases](https://github.com/APTEM591/com.gamespear.project-designer/releases) page and import it via `Assets > Import Package > Custom Package...`.
+Download the latest `.unitypackage` from the [Releases](https://github.com/APTEM591/Unity-Project-Designer/releases) page and import it via `Assets > Import Package > Custom Package...`.
 
 ## Usage & Settings
 

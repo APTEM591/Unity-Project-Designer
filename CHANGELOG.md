@@ -32,6 +32,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings window under `Tools > Project Designer > Settings...`, plus quick toggles under the `Tools > Project Designer` menu.
 - Zero external dependencies; Editor-only assembly definition (`GameSpear.ProjectDesigner.Editor`).
 
-[1.2.0]: https://github.com/APTEM591/com.gamespear.project-designer/releases/tag/1.2.0
-[1.1.0]: https://github.com/APTEM591/com.gamespear.project-designer/releases/tag/1.1.0
-[1.0.0]: https://github.com/APTEM591/com.gamespear.project-designer/releases/tag/1.0.0
+[1.2.0]: https://github.com/APTEM591/Unity-Project-Designer/releases/tag/1.2.0
+[1.1.0]: https://github.com/APTEM591/Unity-Project-Designer/releases/tag/1.1.0
+[1.0.0]: https://github.com/APTEM591/Unity-Project-Designer/releases/tag/1.0.0
