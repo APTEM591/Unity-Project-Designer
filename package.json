@@ -24,5 +24,12 @@
   },
   "documentationUrl": "https://github.com/APTEM591/Unity-Project-Designer#readme",
   "changelogUrl": "https://github.com/APTEM591/Unity-Project-Designer/blob/main/CHANGELOG.md",
-  "licensesUrl": "https://github.com/APTEM591/Unity-Project-Designer/blob/main/LICENSE.md"
+  "licensesUrl": "https://github.com/APTEM591/Unity-Project-Designer/blob/main/LICENSE.md",
+  "samples": [
+    {
+      "displayName": "Preview Examples",
+      "description": "Demo prefabs for each custom preview type: a UI/Canvas card, a particle effect, and world-space TextMeshPro text.",
+      "path": "Samples~/Preview Examples"
+    }
+  ]
 }
