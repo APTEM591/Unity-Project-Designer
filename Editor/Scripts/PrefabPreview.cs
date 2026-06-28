@@ -292,6 +292,7 @@ namespace GameSpear.ProjectDesigner.Editor
                 scene = EditorSceneManager.NewPreviewScene();
                 instance = UnityEngine.Object.Instantiate(prefab);
                 SceneManager.MoveGameObjectToScene(instance, scene);
+                ActivateForPreview(instance);
 
                 Canvas canvas = instance.GetComponentInChildren<Canvas>(true);
                 if (canvas == null)
@@ -408,6 +409,7 @@ namespace GameSpear.ProjectDesigner.Editor
                 scene = EditorSceneManager.NewPreviewScene();
                 instance = UnityEngine.Object.Instantiate(prefab);
                 SceneManager.MoveGameObjectToScene(instance, scene);
+                ActivateForPreview(instance);
 
                 // Root systems are those not driven by a parent system (their children are simulated along
                 // with them via Simulate(withChildren)). Fixing the random seed makes the captured frames a
@@ -530,6 +532,17 @@ namespace GameSpear.ProjectDesigner.Editor
             }
         }
 
+        // Prefabs can be saved with their root GameObject inactive; instantiated as-is they draw nothing, so
+        // the render comes back empty and we keep the generic icon. When the user opts in, force the root
+        // active for the preview. We touch only the root (not inactive children) so the thumbnail matches how
+        // the prefab looks when simply enabled, without revealing intentionally hidden child objects.
+        // Activating runs the instance's OnEnable, but only inside this throwaway preview scene.
+        private static void ActivateForPreview(GameObject instance)
+        {
+            if (instance != null && Settings.InactivePreviewEnabled && !instance.activeSelf)
+                instance.SetActive(true);
+        }
+
         // Advance each root system by 't' seconds (restart=true simulates from zero; restart=false steps on
         // from the current state so successive captures form a continuous animation).
         private static void Simulate(List<ParticleSystem> roots, float t, bool restart)
@@ -566,6 +579,7 @@ namespace GameSpear.ProjectDesigner.Editor
                 scene = EditorSceneManager.NewPreviewScene();
                 instance = UnityEngine.Object.Instantiate(prefab);
                 SceneManager.MoveGameObjectToScene(instance, scene);
+                ActivateForPreview(instance);
 
                 // Generate each TMP component's mesh, then accumulate world-space bounds from the ACTUAL
                 // generated glyph vertices. We deliberately do NOT use MeshFilter.sharedMesh.bounds: for a

@@ -26,6 +26,18 @@ namespace GameSpear.ProjectDesigner.Editor
         public static bool UiPreviewEnabled { get => GetBool("UiPreview", true); set => SetBool("UiPreview", value); }
         // Render a short looping animation for particle-system prefabs over their generic icon.
         public static bool ParticlePreviewEnabled { get => GetBool("ParticlePreview", true); set => SetBool("ParticlePreview", value); }
+        // Also render previews for prefabs saved with an inactive root (force-activated for the render).
+        // Off by default; such prefabs draw nothing as-is, so without this they keep the generic icon.
+        // Changing it regenerates previews, since the render output depends on this flag.
+        public static bool InactivePreviewEnabled
+        {
+            get => GetBool("InactivePreview", false);
+            set
+            {
+                if (value != GetBool("InactivePreview", false)) PrefabPreview.ClearCache();
+                SetBool("InactivePreview", value);
+            }
+        }
         // Capture rate (frames sampled per second of effect) for particle preview animations. Higher = more
         // frames / smoother (played back at real time), not faster. Changing it regenerates particle previews.
         public static int ParticlePreviewFps
@@ -156,6 +168,7 @@ namespace GameSpear.ProjectDesigner.Editor
             FolderColorStrength = 0.7f;
             UiPreviewEnabled = true;
             ParticlePreviewEnabled = true;
+            InactivePreviewEnabled = false;
             ParticlePreviewFps = 12;
             foreach (FolderIcon.ContentCategory category in FolderIcon.AllCategories)
             {
@@ -219,6 +232,11 @@ namespace GameSpear.ProjectDesigner.Editor
         private static void ToggleParticlePreview() => ParticlePreviewEnabled = !ParticlePreviewEnabled;
         [MenuItem(MenuRoot + "Particle Previews", validate = true)]
         private static bool ToggleParticlePreviewValidate() { Menu.SetChecked(MenuRoot + "Particle Previews", ParticlePreviewEnabled); return Enabled; }
+
+        [MenuItem(MenuRoot + "Preview Inactive Prefabs", priority = 27)]
+        private static void ToggleInactivePreview() => InactivePreviewEnabled = !InactivePreviewEnabled;
+        [MenuItem(MenuRoot + "Preview Inactive Prefabs", validate = true)]
+        private static bool ToggleInactivePreviewValidate() { Menu.SetChecked(MenuRoot + "Preview Inactive Prefabs", InactivePreviewEnabled); return Enabled && (UiPreviewEnabled || ParticlePreviewEnabled); }
         #endregion
     }
 }

@@ -80,6 +80,10 @@ namespace GameSpear.ProjectDesigner.Editor
                         EditorGUILayout.HelpBox("High FPS captures more frames per preview (more memory, slower to generate) and repaints the Project window more often while a particle preview is visible. 12 is usually plenty.", MessageType.Warning);
                     EditorGUI.indentLevel--;
                 }
+                using (new EditorGUI.DisabledScope(!Settings.UiPreviewEnabled && !Settings.ParticlePreviewEnabled))
+                {
+                    Settings.InactivePreviewEnabled = EditorGUILayout.Toggle(new GUIContent("Preview Inactive Prefabs", "Also render previews for prefabs saved with an inactive root, force-activating them for the render. Off by default — such prefabs draw nothing as-is and would otherwise keep the generic icon."), Settings.InactivePreviewEnabled);
+                }
             }
         }
 
