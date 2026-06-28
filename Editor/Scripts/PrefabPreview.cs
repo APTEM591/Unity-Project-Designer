@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
+using UnityEngine.UI;
 
 namespace GameSpear.ProjectDesigner.Editor
 {
@@ -160,11 +162,16 @@ namespace GameSpear.ProjectDesigner.Editor
             k = Kind.None;
             if (go != null)
             {
-                if (go.GetComponentInChildren<Canvas>(true) != null &&
-                    go.GetComponentInChildren<CanvasRenderer>(true) != null)
-                    k = Kind.Ui;
-                else if (go.GetComponentInChildren<ParticleSystem>(true) != null)
-                    k = Kind.Particle;
+                bool hasCanvas = go.GetComponentInChildren<Canvas>(true) != null;
+                bool hasCanvasRenderer = go.GetComponentInChildren<CanvasRenderer>(true) != null;
+                bool hasParticle = go.GetComponentInChildren<ParticleSystem>(true) != null;
+                // Any CanvasRenderer means UI (standalone or fragment) — takes priority over particle.
+                // UIParticle components add both a ParticleSystem and a CanvasRenderer; the prefab is
+                // still fundamentally a UI widget and must go through RenderUi (RenderParticle finds no
+                // standard Renderer bounds for UIParticle, so it always returns null for such prefabs).
+                // Only prefabs with no CanvasRenderer at all (pure VFX) are rendered as particles.
+                if (hasCanvasRenderer) k = Kind.Ui;
+                else if (hasParticle) k = Kind.Particle;
             }
             _kind[guid] = k;
             return k;
@@ -247,7 +254,13 @@ namespace GameSpear.ProjectDesigner.Editor
         }
 
         // Renders a UI prefab to an owned Texture2D via an isolated preview scene. Returns null on any
-        // failure (e.g. an empty Canvas), leaving the generic icon in place.
+        // failure (e.g. an empty or transparent canvas), leaving the generic icon in place.
+        //
+        // Handles two cases:
+        //   * Standalone canvas prefabs: the prefab owns its Canvas; used directly.
+        //   * Fragment UI prefabs (buttons, cards, list items): have CanvasRenderer children but no Canvas
+        //     of their own (they live inside the scene's root canvas). We create a temporary wrapper Canvas
+        //     sized to the fragment's RectTransform so it renders at its authored scale.
         private static Texture2D RenderUi(string path)
         {
             GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
@@ -257,6 +270,7 @@ namespace GameSpear.ProjectDesigner.Editor
             RenderTexture rt = null;
             RenderTexture prevActive = RenderTexture.active;
             GameObject instance = null;
+            GameObject canvasWrapper = null;
             try
             {
                 scene = EditorSceneManager.NewPreviewScene();
@@ -264,8 +278,36 @@ namespace GameSpear.ProjectDesigner.Editor
                 SceneManager.MoveGameObjectToScene(instance, scene);
 
                 Canvas canvas = instance.GetComponentInChildren<Canvas>(true);
-                if (canvas == null) return null;
+                if (canvas == null)
+                {
+                    // Fragment UI: wrap in a temporary Canvas sized to the fragment's authored dimensions.
+                    canvasWrapper = new GameObject("PD_Canvas");
+                    SceneManager.MoveGameObjectToScene(canvasWrapper, scene);
+                    canvas = canvasWrapper.AddComponent<Canvas>(); // also attaches a RectTransform
+                    RectTransform wrapRt = canvasWrapper.GetComponent<RectTransform>();
+                    RectTransform fragRt = instance.GetComponent<RectTransform>();
+                    if (wrapRt != null)
+                    {
+                        // Use the fragment's authored size only when both axes are positive.
+                        // Negative sizeDelta means the fragment uses stretch anchors (fills its parent minus
+                        // an offset) — there is no meaningful standalone size, so fall back to 400×400.
+                        bool hasPositiveSize = fragRt != null
+                            && fragRt.sizeDelta.x > 0f && fragRt.sizeDelta.y > 0f;
+                        wrapRt.sizeDelta = hasPositiveSize ? fragRt.sizeDelta : new Vector2(400f, 400f);
+                    }
+                    instance.transform.SetParent(canvasWrapper.transform, false);
+                    // Reset the fragment's position so it sits at the wrapper origin rather than at
+                    // whatever absolute anchoredPosition it had in its original scene hierarchy.
+                    RectTransform instRt = instance.GetComponent<RectTransform>();
+                    if (instRt != null) instRt.anchoredPosition = Vector2.zero;
+                }
                 canvas.renderMode = RenderMode.WorldSpace;
+
+                // CanvasScaler in "Scale With Screen Size" mode derives a scaleFactor from the editor
+                // screen size, which is arbitrary in a preview scene and can shrink or enlarge content
+                // to the point where nothing visible falls inside the camera frustum.
+                CanvasScaler scaler = canvas.GetComponent<CanvasScaler>();
+                if (scaler != null) scaler.enabled = false;
 
                 RectTransform canvasRect = canvas.GetComponent<RectTransform>();
                 if (canvasRect != null && (canvasRect.rect.width < 1f || canvasRect.rect.height < 1f))
@@ -278,6 +320,12 @@ namespace GameSpear.ProjectDesigner.Editor
                 canvas.worldCamera = cam;
 
                 Canvas.ForceUpdateCanvases();
+                // Canvas.ForceUpdateCanvases() only flushes dirty marks; nested layout groups (Grid,
+                // HorizontalLayout, ContentSizeFitter, etc.) need an explicit rebuild to produce correct
+                // world-space bounds before we frame the camera.
+                GameObject layoutRoot = canvasWrapper != null ? canvasWrapper : instance;
+                foreach (RectTransform childRt in layoutRoot.GetComponentsInChildren<RectTransform>(true))
+                    LayoutRebuilder.ForceRebuildLayoutImmediate(childRt);
 
                 if (!TryGetUiBounds(instance, canvas, out Bounds b)) return null;
 
@@ -292,9 +340,7 @@ namespace GameSpear.ProjectDesigner.Editor
                 cam.cullingMask = ~0;
 
                 rt = RenderTexture.GetTemporary(ThumbSize, ThumbSize, 16, RenderTextureFormat.ARGB32);
-                cam.targetTexture = rt;
-                cam.Render();
-                cam.targetTexture = null;
+                RenderCamera(cam, rt);
 
                 RenderTexture.active = rt;
                 Texture2D tex = new Texture2D(ThumbSize, ThumbSize, TextureFormat.RGBA32, false)
@@ -303,6 +349,7 @@ namespace GameSpear.ProjectDesigner.Editor
                 };
                 tex.ReadPixels(new Rect(0f, 0f, ThumbSize, ThumbSize), 0, 0);
                 tex.Apply();
+                if (LooksEmpty(tex, 4)) { UnityEngine.Object.DestroyImmediate(tex); return null; }
                 return tex;
             }
             catch
@@ -313,7 +360,10 @@ namespace GameSpear.ProjectDesigner.Editor
             {
                 RenderTexture.active = prevActive;
                 if (rt != null) RenderTexture.ReleaseTemporary(rt);
-                if (instance != null) UnityEngine.Object.DestroyImmediate(instance);
+                // Destroy from the top of the hierarchy: if the instance was parented to a wrapper canvas,
+                // destroying the wrapper also destroys the instance.
+                if (canvasWrapper != null) UnityEngine.Object.DestroyImmediate(canvasWrapper);
+                else if (instance != null) UnityEngine.Object.DestroyImmediate(instance);
                 if (scene.IsValid()) EditorSceneManager.ClosePreviewScene(scene);
             }
         }
@@ -431,7 +481,6 @@ namespace GameSpear.ProjectDesigner.Editor
                     filterMode = FilterMode.Bilinear
                 };
                 rt = RenderTexture.GetTemporary(ThumbSize, ThumbSize, 16, RenderTextureFormat.ARGB32);
-                cam.targetTexture = rt;
 
                 // Pass 2: replay the same simulation, capturing each frame into its atlas column (advance
                 // first, mirroring pass 1, so the captured frames line up with the bounds we computed).
@@ -441,7 +490,6 @@ namespace GameSpear.ProjectDesigner.Editor
                     Simulate(roots, step, false);
                     CaptureFrame(cam, rt, atlas, i);
                 }
-                cam.targetTexture = null;
                 atlas.Apply();
 
                 if (LooksEmpty(atlas)) return null;
@@ -476,9 +524,32 @@ namespace GameSpear.ProjectDesigner.Editor
 
         private static void CaptureFrame(Camera cam, RenderTexture rt, Texture2D atlas, int frame)
         {
-            cam.Render();
+            RenderCamera(cam, rt);
             RenderTexture.active = rt;
             atlas.ReadPixels(new Rect(0f, 0f, ThumbSize, ThumbSize), frame * ThumbSize, 0);
+        }
+
+        // Render 'cam' into 'rt' under whichever render pipeline is active. Camera.Render() is the legacy
+        // built-in path; under a Scriptable Render Pipeline (URP / HDRP) it draws nothing, so we must route
+        // through SubmitRenderRequest — without this, every preview comes back blank in SRP projects. The
+        // render-request API is 2022.2+, so older Unity versions fall back to the built-in call.
+        private static void RenderCamera(Camera cam, RenderTexture rt)
+        {
+#if UNITY_2022_2_OR_NEWER
+            if (GraphicsSettings.currentRenderPipeline != null)
+            {
+                RenderPipeline.StandardRequest request = new RenderPipeline.StandardRequest { destination = rt };
+                if (RenderPipeline.SupportsRenderRequest(cam, request))
+                {
+                    cam.SubmitRenderRequest(request);
+                    return;
+                }
+            }
+#endif
+            RenderTexture prev = cam.targetTexture;
+            cam.targetTexture = rt;
+            cam.Render();
+            cam.targetTexture = prev;
         }
 
         // Best-effort time at which a system stops emitting, used to size one-shot loops. Continuous
@@ -537,7 +608,9 @@ namespace GameSpear.ProjectDesigner.Editor
 
         // Sparse check for "the render is basically just the background" so we keep the generic icon instead
         // of showing a flat gray square (e.g. a system that emits nothing under simulation).
-        private static bool LooksEmpty(Texture2D atlas)
+        // minDiffering: particle atlases have many frames so 12 is appropriate; a single UI thumbnail is
+        // 128×128 so sparse content (thin bars, small icons) only hits a handful of the 169 samples — use 4.
+        private static bool LooksEmpty(Texture2D atlas, int minDiffering = 12)
         {
             Color32[] px = atlas.GetPixels32();
             Color32 bg = Background;
@@ -547,7 +620,7 @@ namespace GameSpear.ProjectDesigner.Editor
                 Color32 p = px[i];
                 if (Mathf.Abs(p.r - bg.r) + Mathf.Abs(p.g - bg.g) + Mathf.Abs(p.b - bg.b) > 24)
                 {
-                    if (++differing >= 12) return false;
+                    if (++differing >= minDiffering) return false;
                 }
             }
             return true;

@@ -42,6 +42,14 @@ namespace GameSpear.ProjectDesigner.Editor
             DrawRows();
             EditorGUILayout.Space(12f);
 
+            if (GUILayout.Button("Refresh Previews"))
+            {
+                PrefabPreview.ClearCache();
+                EditorApplication.RepaintProjectWindow();
+            }
+
+            EditorGUILayout.Space(4f);
+
             if (GUILayout.Button("Reset to Defaults") &&
                 EditorUtility.DisplayDialog("Project Designer", "Reset all Project Designer settings to their defaults?", "Reset", "Cancel"))
             {
