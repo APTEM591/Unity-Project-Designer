@@ -2,7 +2,8 @@
 
 A lightweight, zero-dependency Unity Editor extension that enhances the Project window with better visualization and organization tools.
 
-<img width="325" height="215" alt="image" src="https://github.com/user-attachments/assets/0723d831-1a07-4295-846f-958bd1e52300" />
+<img width="325" height="215" alt="image" src="https://github.com/user-attachments/assets/0723d831-1a07-4295-846f-958bd1e52300" />  <img width="85" height="215" alt="ezgif com-crop (1)" src="https://github.com/user-attachments/assets/956a11a5-d29a-4aa3-a26c-bcbe6ab5aa83" />
+
 
 ## Features
 
