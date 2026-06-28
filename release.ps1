@@ -93,7 +93,7 @@ $csharpCode = "AssetDatabase.ExportPackage(`"Packages/com.gamespear.project-desi
     Invoke-McpCli run-tool script-execute --input-file -
 
 if (-not (Test-Path $pkgOutput)) {
-    Write-Warning "Export may have failed — $pkgOutput not found. Attach it to the release manually."
+    Write-Warning "Export may have failed - $pkgOutput not found. Attach it to the release manually."
 }
 
 # ---- 8. Build release notes in commit-id format ----
