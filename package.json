@@ -1,6 +1,6 @@
 {
   "name": "com.gamespear.project-designer",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "displayName": "Project Designer",
   "description": "A lightweight, zero-dependency Unity Editor extension that enhances the Project window with content-based folder icons, custom folder colors, tree branch connector lines, and alternating row shading.",
   "unity": "2021.3",

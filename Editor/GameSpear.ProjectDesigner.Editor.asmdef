@@ -1,7 +1,9 @@
 {
     "name": "GameSpear.ProjectDesigner.Editor",
     "rootNamespace": "GameSpear.ProjectDesigner",
-    "references": [],
+    "references": [
+        "Unity.TextMeshPro"
+    ],
     "includePlatforms": [
         "Editor"
     ],
@@ -11,6 +13,12 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [],
-    "versionDefines": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.ugui",
+            "expression": "2.0.0",
+            "define": "PROJECT_DESIGNER_TMP"
+        }
+    ],
     "noEngineReferences": false
 }

@@ -108,7 +108,7 @@ namespace GameSpear.ProjectDesigner.Editor
 
             // 5. Content-based folder icons: a small emblem over the folder icon's corner, keeping
             //    Unity's folder icon (skip the "Assets"/"Packages" roots at depth 0).
-            if (Settings.FolderIconsEnabled && isFolder && GetDepth(path) >= 1)
+            if (Settings.FolderIconsEnabled && isFolder && Tree.GetDepth(path) >= 1)
             {
                 FolderIcon.ContentCategory category = FolderIcon.GetCategory(path);
                 if (category != FolderIcon.ContentCategory.None)
@@ -181,16 +181,6 @@ namespace GameSpear.ProjectDesigner.Editor
             float x = right ? host.xMax - size : host.xMin;
             float y = bottom ? host.yMax - size : host.yMin;
             return new Rect(x, y, size, size);
-        }
-
-        private static int GetDepth(string path)
-        {
-            int slashes = 0;
-            foreach (char c in path)
-            {
-                if (c == '/') slashes++;
-            }
-            return slashes;
         }
     }
 }

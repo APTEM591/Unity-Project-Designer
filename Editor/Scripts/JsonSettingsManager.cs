@@ -179,12 +179,6 @@ namespace GameSpear.ProjectDesigner.Editor
             _cache.stringDict.Remove(key);
             Save();
         }
-
-        public static void DeleteAllKeys()
-        {
-            _cache = new SettingsData();
-            Save();
-        }
         #endregion
     }
 }

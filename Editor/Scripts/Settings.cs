@@ -78,7 +78,7 @@ namespace GameSpear.ProjectDesigner.Editor
         public static void SetFolderColor(string guid, Color color)
         {
             if (string.IsNullOrEmpty(guid)) return;
-            JsonSettingsManager.SetString(Prefix + "FolderColor_" + guid, "#" + ColorUtility.ToHtmlStringRGBA(color));
+            JsonSettingsManager.SetColor(Prefix + "FolderColor_" + guid, color);
             AddToFolderColorIndex(guid);
             Repaint();
         }
@@ -176,12 +176,8 @@ namespace GameSpear.ProjectDesigner.Editor
         private static void SetInt(string key, int value) { JsonSettingsManager.SetInt(Prefix + key, value); Repaint(); }
         private static float GetFloat(string key, float fallback) => JsonSettingsManager.GetFloat(Prefix + key, fallback);
         private static void SetFloat(string key, float value) { JsonSettingsManager.SetFloat(Prefix + key, value); Repaint(); }
-        private static Color GetColor(string key, Color fallback)
-        {
-            string stored = JsonSettingsManager.GetString(Prefix + key, string.Empty);
-            return !string.IsNullOrEmpty(stored) && ColorUtility.TryParseHtmlString(stored, out Color parsed) ? parsed : fallback;
-        }
-        private static void SetColor(string key, Color value) { JsonSettingsManager.SetString(Prefix + key, "#" + ColorUtility.ToHtmlStringRGBA(value)); Repaint(); }
+        private static Color GetColor(string key, Color fallback) => JsonSettingsManager.GetColor(Prefix + key, fallback);
+        private static void SetColor(string key, Color value) { JsonSettingsManager.SetColor(Prefix + key, value); Repaint(); }
         private static void Repaint() => EditorApplication.RepaintProjectWindow();
         #endregion
 

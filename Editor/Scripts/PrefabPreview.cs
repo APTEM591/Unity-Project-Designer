@@ -6,17 +6,21 @@ using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
+#if PROJECT_DESIGNER_TMP
+using TMPro;
+#endif
 
 namespace GameSpear.ProjectDesigner.Editor
 {
     // Renders previews for prefabs that Unity's built-in AssetPreview leaves blank. Unity already
-    // thumbnails mesh/sprite/etc. prefabs in the Project window, so re-drawing those adds nothing. Two
-    // kinds genuinely show only the generic icon, and this fills both, leaving everything else to Unity:
+    // thumbnails mesh/sprite/etc. prefabs in the Project window, so re-drawing those adds nothing. A few
+    // kinds genuinely show only the generic icon, and this fills them, leaving everything else to Unity:
     //
     //   * UI / Canvas prefabs  — a single rendered thumbnail (AssetPreview never renders screen-space UI).
     //   * Particle systems     — a short looping animation (AssetPreview shows them un-simulated / empty).
+    //   * World-space TMP text — a static thumbnail (AssetPreview can't render TMP's generated mesh).
     //
-    // Both are rendered in an isolated preview scene via a camera bound to that scene (Camera.scene), read
+    // All are rendered in an isolated preview scene via a camera bound to that scene (Camera.scene), read
     // back into an owned Texture2D. Particle frames are pre-simulated and packed into one horizontal atlas;
     // the Project window cycles through them. PreviewRenderUtility can't do either — UGUI only emits
     // geometry for a camera attached to a real/preview scene, not PRU's internal camera.
@@ -27,7 +31,7 @@ namespace GameSpear.ProjectDesigner.Editor
     // they are destroyed on eviction / cache clear to avoid leaks.
     internal static class PrefabPreview
     {
-        private enum Kind { None, Ui, Particle }
+        private enum Kind { None, Ui, Particle, TmpText }
 
         private const int ThumbSize = 128;
         private const int MaxCache = 256;
@@ -100,9 +104,9 @@ namespace GameSpear.ProjectDesigner.Editor
             EditorApplication.RepaintProjectWindow();
         }
 
-        // A custom thumbnail for a prefab Unity can't preview (UI or particle), or false to leave Unity's
-        // native preview / generic icon untouched. 'uv' selects the current animation frame within the
-        // texture (the whole texture for static UI thumbnails). Enqueues generation when not yet cached or
+        // A custom thumbnail for a prefab Unity can't preview (UI, particle, or TMP text), or false to leave
+        // Unity's native preview / generic icon untouched. 'uv' selects the current animation frame within
+        // the texture (the whole texture for static thumbnails). Enqueues generation when not yet cached or
         // when the cached copy has gone stale.
         public static bool TryGetPreview(string guid, out Texture2D tex, out Rect uv)
         {
@@ -118,6 +122,7 @@ namespace GameSpear.ProjectDesigner.Editor
             if (kind == Kind.None) return false;
             if (kind == Kind.Ui && !Settings.UiPreviewEnabled) return false;
             if (kind == Kind.Particle && !Settings.ParticlePreviewEnabled) return false;
+            if (kind == Kind.TmpText && !Settings.UiPreviewEnabled) return false;
 
             Hash128 hash = AssetDatabase.GetAssetDependencyHash(path);
             if (_cache.TryGetValue(guid, out Texture2D cachedTex) && cachedTex != null &&
@@ -162,9 +167,13 @@ namespace GameSpear.ProjectDesigner.Editor
             k = Kind.None;
             if (go != null)
             {
-                bool hasCanvas = go.GetComponentInChildren<Canvas>(true) != null;
                 bool hasCanvasRenderer = go.GetComponentInChildren<CanvasRenderer>(true) != null;
                 bool hasParticle = go.GetComponentInChildren<ParticleSystem>(true) != null;
+#if PROJECT_DESIGNER_TMP
+                // TextMeshPro (non-UGUI) has no CanvasRenderer; TextMeshProUGUI has one, so it is already
+                // caught as UI above. Only the 3D/world-space variant needs a dedicated path here.
+                bool hasTmpText = !hasCanvasRenderer && go.GetComponentInChildren<TextMeshPro>(true) != null;
+#endif
                 // Any CanvasRenderer means UI (standalone or fragment) — takes priority over particle.
                 // UIParticle components add both a ParticleSystem and a CanvasRenderer; the prefab is
                 // still fundamentally a UI widget and must go through RenderUi (RenderParticle finds no
@@ -172,6 +181,9 @@ namespace GameSpear.ProjectDesigner.Editor
                 // Only prefabs with no CanvasRenderer at all (pure VFX) are rendered as particles.
                 if (hasCanvasRenderer) k = Kind.Ui;
                 else if (hasParticle) k = Kind.Particle;
+#if PROJECT_DESIGNER_TMP
+                else if (hasTmpText) k = Kind.TmpText;
+#endif
             }
             _kind[guid] = k;
             return k;
@@ -211,7 +223,11 @@ namespace GameSpear.ProjectDesigner.Editor
             Hash128 hash = AssetDatabase.GetAssetDependencyHash(path);
             int frames = 0;
             float fps = 0f;
-            Texture2D tex = kind == Kind.Particle ? RenderParticle(path, out frames, out fps) : RenderUi(path);
+            Texture2D tex = kind == Kind.Particle ? RenderParticle(path, out frames, out fps)
+#if PROJECT_DESIGNER_TMP
+                : kind == Kind.TmpText ? RenderTmpText(path)
+#endif
+                : RenderUi(path);
             if (tex != null)
             {
                 Store(guid, tex, hash);
@@ -445,7 +461,7 @@ namespace GameSpear.ProjectDesigner.Editor
                 for (int i = 0; i < frames; i++)
                 {
                     Simulate(roots, step, false);
-                    if (TryGetParticleBounds(instance, out Bounds fb))
+                    if (TryGetRendererBounds(instance, out Bounds fb))
                     {
                         if (!anyBounds) { b = fb; anyBounds = true; }
                         else b.Encapsulate(fb);
@@ -529,6 +545,114 @@ namespace GameSpear.ProjectDesigner.Editor
             atlas.ReadPixels(new Rect(0f, 0f, ThumbSize, ThumbSize), frame * ThumbSize, 0);
         }
 
+#if PROJECT_DESIGNER_TMP
+        // Renders a world-space TextMeshPro prefab (non-UGUI) to a static thumbnail. ForceMeshUpdate
+        // generates the text geometry synchronously; the camera frame is computed from the actual
+        // generated glyph vertices (TMP_TextInfo) rather than Renderer.bounds (zero pre-render in a
+        // preview scene) or MeshFilter.sharedMesh.bounds (unreliable for TMP meshes in-editor — see below).
+        private static Texture2D RenderTmpText(string path)
+        {
+            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+            if (prefab == null) return null;
+
+            Scene scene = default;
+            RenderTexture rt = null;
+            RenderTexture prevActive = RenderTexture.active;
+            GameObject instance = null;
+            GameObject camGo = null;
+            GameObject lightGo = null;
+            try
+            {
+                scene = EditorSceneManager.NewPreviewScene();
+                instance = UnityEngine.Object.Instantiate(prefab);
+                SceneManager.MoveGameObjectToScene(instance, scene);
+
+                // Generate each TMP component's mesh, then accumulate world-space bounds from the ACTUAL
+                // generated glyph vertices. We deliberately do NOT use MeshFilter.sharedMesh.bounds: for a
+                // TMP-generated mesh that AABB is unreliable in the editor — it reports a box covering only
+                // part of the text (measured: center x=0.14, extent x=0.24 for text that truly spans
+                // x:[-0.38,0.38]), which shifts the camera sideways and clips the leading glyph. The
+                // per-character vertices in TMP_TextInfo are the real rendered geometry, so the frame is
+                // exact and needs no fudge factor. Vertices are TMP-local; push them through the text
+                // transform's localToWorld to handle scaled/rotated text objects.
+                Bounds b = default;
+                bool anyBounds = false;
+                foreach (TMP_Text tmp in instance.GetComponentsInChildren<TMP_Text>(true))
+                {
+                    tmp.ForceMeshUpdate(ignoreActiveState: true, forceTextReparsing: true);
+                    TMP_TextInfo info = tmp.textInfo;
+                    if (info == null || info.characterCount == 0) continue;
+                    Matrix4x4 localToWorld = tmp.transform.localToWorldMatrix;
+                    for (int m = 0; m < info.meshInfo.Length; m++)
+                    {
+                        Vector3[] verts = info.meshInfo[m].vertices;
+                        if (verts == null) continue;
+                        // vertexCount (not verts.Length): the array is over-allocated and padded with
+                        // zeros that would wrongly drag the bounds toward the origin.
+                        int vertexCount = info.meshInfo[m].vertexCount;
+                        for (int v = 0; v < vertexCount; v++)
+                        {
+                            Vector3 world = localToWorld.MultiplyPoint3x4(verts[v]);
+                            if (!anyBounds) { b = new Bounds(world, Vector3.zero); anyBounds = true; }
+                            else b.Encapsulate(world);
+                        }
+                    }
+                }
+                if (!anyBounds) return null;
+
+                camGo = new GameObject("PD_PreviewCamera");
+                SceneManager.MoveGameObjectToScene(camGo, scene);
+                Camera cam = camGo.AddComponent<Camera>();
+                cam.scene = scene;
+                cam.orthographic = true;
+                // The vertex AABB already covers the real glyph quads (which include the SDF padding TMP
+                // bakes into each quad), so this 8% is just uniform visual breathing room, not a fix for a
+                // bad fit. The target RT is square, so the ortho half-size must satisfy the larger axis.
+                cam.orthographicSize = Mathf.Max(b.extents.x, b.extents.y, 0.01f) * 1.08f;
+                cam.transform.position = b.center + new Vector3(0f, 0f, -50f);
+                cam.transform.rotation = Quaternion.LookRotation(Vector3.forward, Vector3.up);
+                cam.nearClipPlane = 0.01f;
+                cam.farClipPlane = 1000f;
+                cam.clearFlags = CameraClearFlags.SolidColor;
+                cam.backgroundColor = Background;
+                cam.cullingMask = ~0;
+
+                lightGo = new GameObject("PD_PreviewLight");
+                SceneManager.MoveGameObjectToScene(lightGo, scene);
+                Light light = lightGo.AddComponent<Light>();
+                light.type = LightType.Directional;
+                light.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
+                light.intensity = 1f;
+
+                rt = RenderTexture.GetTemporary(ThumbSize, ThumbSize, 16, RenderTextureFormat.ARGB32);
+                RenderCamera(cam, rt);
+
+                RenderTexture.active = rt;
+                Texture2D tex = new Texture2D(ThumbSize, ThumbSize, TextureFormat.RGBA32, false)
+                {
+                    hideFlags = HideFlags.HideAndDontSave
+                };
+                tex.ReadPixels(new Rect(0f, 0f, ThumbSize, ThumbSize), 0, 0);
+                tex.Apply();
+                if (LooksEmpty(tex, 4)) { UnityEngine.Object.DestroyImmediate(tex); return null; }
+                return tex;
+            }
+            catch
+            {
+                return null;
+            }
+            finally
+            {
+                RenderTexture.active = prevActive;
+                if (rt != null) RenderTexture.ReleaseTemporary(rt);
+                if (camGo != null) UnityEngine.Object.DestroyImmediate(camGo);
+                if (lightGo != null) UnityEngine.Object.DestroyImmediate(lightGo);
+                if (instance != null) UnityEngine.Object.DestroyImmediate(instance);
+                if (scene.IsValid()) EditorSceneManager.ClosePreviewScene(scene);
+            }
+        }
+#endif
+
         // Render 'cam' into 'rt' under whichever render pipeline is active. Camera.Render() is the legacy
         // built-in path; under a Scriptable Render Pipeline (URP / HDRP) it draws nothing, so we must route
         // through SubmitRenderRequest — without this, every preview comes back blank in SRP projects. The
@@ -590,8 +714,8 @@ namespace GameSpear.ProjectDesigner.Editor
             }
         }
 
-        // World bounds of the currently-simulated particle renderers, used to frame the camera.
-        private static bool TryGetParticleBounds(GameObject instance, out Bounds bounds)
+        // World bounds of all enabled Renderers on the instance, used to frame the camera.
+        private static bool TryGetRendererBounds(GameObject instance, out Bounds bounds)
         {
             bounds = default;
             bool any = false;
@@ -608,8 +732,8 @@ namespace GameSpear.ProjectDesigner.Editor
 
         // Sparse check for "the render is basically just the background" so we keep the generic icon instead
         // of showing a flat gray square (e.g. a system that emits nothing under simulation).
-        // minDiffering: particle atlases have many frames so 12 is appropriate; a single UI thumbnail is
-        // 128×128 so sparse content (thin bars, small icons) only hits a handful of the 169 samples — use 4.
+        // minDiffering: particle atlases have many frames so 12 is appropriate; a single thumbnail is
+        // 128x128 so sparse content (thin bars, small icons) only hits a handful of the 169 samples — use 4.
         private static bool LooksEmpty(Texture2D atlas, int minDiffering = 12)
         {
             Color32[] px = atlas.GetPixels32();
