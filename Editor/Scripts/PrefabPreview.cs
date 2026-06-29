@@ -20,6 +20,11 @@ namespace GameSpear.ProjectDesigner.Editor
     //   * Particle systems     — a short looping animation (AssetPreview shows them un-simulated / empty).
     //   * World-space TMP text — a static thumbnail (AssetPreview can't render TMP's generated mesh).
     //
+    // A "combined" prefab — a sprite/mesh character that also carries UI (e.g. a world-space health bar) —
+    // is rendered through the UI path but framed on the CHARACTER, folding in the UI only when it sits close
+    // enough not to shrink the body. A bar floating far above the head (or an oversized world-space canvas)
+    // is cropped instead of dominating the thumbnail (see TryGetPreviewBounds).
+    //
     // All are rendered in an isolated preview scene via a camera bound to that scene (Camera.scene), read
     // back into an owned Texture2D. Particle frames are pre-simulated and packed into one horizontal atlas;
     // the Project window cycles through them. PreviewRenderUtility can't do either — UGUI only emits
@@ -38,6 +43,12 @@ namespace GameSpear.ProjectDesigner.Editor
         private const int MinParticleFrames = 6;        // floor on captured frames (very short loops)
         private const int MaxParticleFrames = 36;       // cap on captured frames (atlas width = N * ThumbSize)
         private const double AnimVisibleWindow = 0.5;   // keep animating this long after the last visible frame
+
+        // A combined prefab frames on its character; nearby UI (e.g. a health bar) is folded into the frame
+        // only while it keeps the framed size within this factor of the character alone. Beyond it the UI is
+        // far enough away (or large enough) that including it would shrink the character to a speck, so it is
+        // left out of the framing and simply cropped.
+        private const float MaxCombinedFrameFactor = 1.6f;
 
         // Opaque neutral backdrop (≈ AssetPreview's) so the thumbnail fully covers the generic icon.
         private static readonly Color Background = new Color(0.32f, 0.32f, 0.32f, 1f);
@@ -179,6 +190,9 @@ namespace GameSpear.ProjectDesigner.Editor
                 // still fundamentally a UI widget and must go through RenderUi (RenderParticle finds no
                 // standard Renderer bounds for UIParticle, so it always returns null for such prefabs).
                 // Only prefabs with no CanvasRenderer at all (pure VFX) are rendered as particles.
+                // A prefab that ALSO has standard Renderers (a sprite/mesh character with a world-space
+                // UI health bar) is still Kind.Ui, but RenderUi frames the character (folding in nearby UI),
+                // not just the UI.
                 if (hasCanvasRenderer) k = Kind.Ui;
                 else if (hasParticle) k = Kind.Particle;
 #if PROJECT_DESIGNER_TMP
@@ -272,11 +286,15 @@ namespace GameSpear.ProjectDesigner.Editor
         // Renders a UI prefab to an owned Texture2D via an isolated preview scene. Returns null on any
         // failure (e.g. an empty or transparent canvas), leaving the generic icon in place.
         //
-        // Handles two cases:
+        // Handles three cases:
         //   * Standalone canvas prefabs: the prefab owns its Canvas; used directly.
         //   * Fragment UI prefabs (buttons, cards, list items): have CanvasRenderer children but no Canvas
         //     of their own (they live inside the scene's root canvas). We create a temporary wrapper Canvas
         //     sized to the fragment's RectTransform so it renders at its authored scale.
+        //   * Combined prefabs: a sprite/mesh character that also carries UI (e.g. a world-space health
+        //     bar). The camera frames the character and folds in the UI only when it is close
+        //     (TryGetPreviewBounds), rendering everything (cullingMask = ~0) so the body is the subject
+        //     rather than the UI alone.
         private static Texture2D RenderUi(string path)
         {
             GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
@@ -320,14 +338,23 @@ namespace GameSpear.ProjectDesigner.Editor
                 }
                 canvas.renderMode = RenderMode.WorldSpace;
 
+                // A "combined" prefab is a sprite/mesh character carrying its OWN world-space canvas (a
+                // health bar) alongside standard renderers. Its canvas is authored at a real world size and
+                // must be left untouched — the rescue below is only for pure-UI prefabs.
+                bool combined = canvasWrapper == null && instance.GetComponentInChildren<Renderer>(true) != null;
+
                 // CanvasScaler in "Scale With Screen Size" mode derives a scaleFactor from the editor
                 // screen size, which is arbitrary in a preview scene and can shrink or enlarge content
                 // to the point where nothing visible falls inside the camera frustum.
                 CanvasScaler scaler = canvas.GetComponent<CanvasScaler>();
                 if (scaler != null) scaler.enabled = false;
 
+                // Rescue a degenerate canvas (no usable rect) by giving it a renderable size. NOT for a
+                // combined prefab: a world-space health bar legitimately has a small rect (e.g. 2.39 x 0.42
+                // world units, height < 1), and forcing it to 400x400 stretches the bar's anchored fill into
+                // a full-frame backdrop that buries the character behind a solid block of the bar's colour.
                 RectTransform canvasRect = canvas.GetComponent<RectTransform>();
-                if (canvasRect != null && (canvasRect.rect.width < 1f || canvasRect.rect.height < 1f))
+                if (!combined && canvasRect != null && (canvasRect.rect.width < 1f || canvasRect.rect.height < 1f))
                     canvasRect.sizeDelta = new Vector2(400f, 400f);
 
                 GameObject camGo = new GameObject("PD_PreviewCamera");
@@ -344,7 +371,7 @@ namespace GameSpear.ProjectDesigner.Editor
                 foreach (RectTransform childRt in layoutRoot.GetComponentsInChildren<RectTransform>(true))
                     LayoutRebuilder.ForceRebuildLayoutImmediate(childRt);
 
-                if (!TryGetUiBounds(instance, canvas, out Bounds b)) return null;
+                if (!TryGetPreviewBounds(instance, canvas, out Bounds b)) return null;
 
                 cam.orthographic = true;
                 cam.orthographicSize = Mathf.Max(b.extents.x, b.extents.y, 0.01f) * 1.1f;
@@ -355,6 +382,15 @@ namespace GameSpear.ProjectDesigner.Editor
                 cam.clearFlags = CameraClearFlags.SolidColor;
                 cam.backgroundColor = Background;
                 cam.cullingMask = ~0;
+
+                // Combined prefabs may include lit 3D meshes; a directional light keeps them from rendering
+                // black. UI and 2D sprites use unlit shaders and ignore it, so pure-UI previews are unchanged.
+                GameObject lightGo = new GameObject("PD_PreviewLight");
+                SceneManager.MoveGameObjectToScene(lightGo, scene);
+                Light light = lightGo.AddComponent<Light>();
+                light.type = LightType.Directional;
+                light.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
+                light.intensity = 1f;
 
                 rt = RenderTexture.GetTemporary(ThumbSize, ThumbSize, 16, RenderTextureFormat.ARGB32);
                 RenderCamera(cam, rt);
@@ -764,13 +800,28 @@ namespace GameSpear.ProjectDesigner.Editor
             return true;
         }
 
-        // World-space bounds of the Canvas's drawable elements, used to frame the camera.
-        private static bool TryGetUiBounds(GameObject instance, Canvas canvas, out Bounds bounds)
+        // World-space bounds the preview camera should frame. The sprite/mesh character (its standard
+        // Renderers) is the subject and drives the framing; UI is folded in only when it stays close.
+        //
+        //   * Pure UI prefab (no standard renderers): frames the Canvas's drawable rects, falling back to
+        //     the canvas RectTransform when none are found — unchanged from before.
+        //   * Combined prefab (sprite/mesh character + world-space UI such as a health bar): frames the
+        //     character, then expands to include the UI only while that keeps the framed size within
+        //     MaxCombinedFrameFactor of the character alone. A health bar floating far above the head, or an
+        //     oversized world-space canvas, would otherwise dominate the thumbnail — shrinking the character
+        //     to a speck or letting the bar fill the frame (the "all-green" health-bar thumbnail). In those
+        //     cases the UI is left out of the framing and simply cropped (it is still drawn if it falls in
+        //     view, since the camera renders everything).
+        private static bool TryGetPreviewBounds(GameObject instance, Canvas canvas, out Bounds bounds)
         {
             bounds = default;
-            bool any = false;
             Vector3[] corners = new Vector3[4];
 
+            bool hasRenderers = TryGetRendererBounds(instance, out Bounds rendererBounds);
+
+            // World-space bounds of every drawable UI element (CanvasRenderer) on the prefab.
+            bool hasUi = false;
+            Bounds uiBounds = default;
             foreach (CanvasRenderer cr in instance.GetComponentsInChildren<CanvasRenderer>(true))
             {
                 RectTransform rt = cr.GetComponent<RectTransform>();
@@ -778,12 +829,31 @@ namespace GameSpear.ProjectDesigner.Editor
                 rt.GetWorldCorners(corners);
                 foreach (Vector3 c in corners)
                 {
-                    if (!any) { bounds = new Bounds(c, Vector3.zero); any = true; }
-                    else bounds.Encapsulate(c);
+                    if (!hasUi) { uiBounds = new Bounds(c, Vector3.zero); hasUi = true; }
+                    else uiBounds.Encapsulate(c);
                 }
             }
 
-            if (!any && canvas != null)
+            // Combined prefab: frame the character, including the UI only when it stays close enough.
+            if (hasRenderers)
+            {
+                bounds = rendererBounds;
+                if (hasUi)
+                {
+                    Bounds combined = rendererBounds;
+                    combined.Encapsulate(uiBounds);
+                    float rFrame = Mathf.Max(rendererBounds.extents.x, rendererBounds.extents.y, 0.0001f);
+                    float cFrame = Mathf.Max(combined.extents.x, combined.extents.y);
+                    if (cFrame <= rFrame * MaxCombinedFrameFactor) bounds = combined;
+                }
+                return true;
+            }
+
+            // Pure UI prefab: frame the drawable UI rects.
+            if (hasUi) { bounds = uiBounds; return true; }
+
+            // Nothing drawable found: fall back to the canvas RectTransform.
+            if (canvas != null)
             {
                 RectTransform crt = canvas.GetComponent<RectTransform>();
                 if (crt != null)
@@ -791,11 +861,11 @@ namespace GameSpear.ProjectDesigner.Editor
                     crt.GetWorldCorners(corners);
                     bounds = new Bounds(corners[0], Vector3.zero);
                     foreach (Vector3 c in corners) bounds.Encapsulate(c);
-                    any = bounds.size.sqrMagnitude > 0f;
+                    return bounds.size.sqrMagnitude > 0f;
                 }
             }
 
-            return any;
+            return false;
         }
     }
 }
