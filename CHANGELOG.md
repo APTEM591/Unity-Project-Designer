@@ -3,6 +3,9 @@
 All notable changes to this package, listed by commit. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.4] - 2026-06-29
+- 7ce98bf - Release 1.2.4: combined sprite + UI prefab previews
+
 ## [1.2.3] - 2026-06-28
 - 829f035 - Release 1.2.3: inactive prefab preview toggle
 
@@ -23,6 +26,7 @@ All notable changes to this package, listed by commit. This project adheres to
 ## [1.0.0] - 2026-05-31
 - e277907 - Initial release: Project Designer 1.0.0
 
+[1.2.4]: https://github.com/APTEM591/Unity-Project-Designer/releases/tag/1.2.4
 [1.2.3]: https://github.com/APTEM591/Unity-Project-Designer/releases/tag/1.2.3
 [1.2.2]: https://github.com/APTEM591/Unity-Project-Designer/releases/tag/1.2.2
 [1.2.1]: https://github.com/APTEM591/Unity-Project-Designer/releases/tag/1.2.1
